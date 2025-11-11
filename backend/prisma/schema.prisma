@@ -1,0 +1,289 @@
+// Prisma schema for BookMyForex clone
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model with KYC support
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  firstName     String
+  lastName      String
+  phone         String    @unique
+  role          UserRole  @default(USER)
+  kycStatus     KYCStatus @default(PENDING)
+  kycDocuments  Json?     // Store document URLs and metadata
+  walletBalance Float     @default(0)
+  referralCode  String    @unique
+  referredBy    String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  orders        Order[]
+  transactions  Transaction[]
+  rateAlerts    RateAlert[]
+  addresses     Address[]
+  referrals     Referral[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([referralCode])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  PARTNER
+}
+
+enum KYCStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+// Address model for delivery
+model Address {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // HOME, OFFICE, OTHER
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  country   String   @default("India")
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders    Order[]
+
+  @@index([userId])
+}
+
+// Currency rates model
+model Rate {
+  id           String   @id @default(uuid())
+  currencyCode String   // USD, EUR, GBP, etc.
+  currencyName String
+  buyRate      Float    // Rate at which we buy from customer (customer sells to us)
+  sellRate     Float    // Rate at which we sell to customer (customer buys from us)
+  baseRate     Float    // Market base rate
+  markup       Float    @default(0) // Markup percentage
+  isActive     Boolean  @default(true)
+  lastUpdated  DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders       Order[]
+
+  @@unique([currencyCode])
+  @@index([currencyCode])
+}
+
+// Partners (money exchangers, banks)
+model Partner {
+  id              String   @id @default(uuid())
+  name            String
+  email           String   @unique
+  phone           String
+  city            String
+  state           String
+  rating          Float    @default(0)
+  isActive        Boolean  @default(true)
+  deliveryEnabled Boolean  @default(true)
+  commissionRate  Float    @default(0) // Commission percentage
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  orders          Order[]
+
+  @@index([city])
+  @@index([isActive])
+}
+
+// Orders model
+model Order {
+  id                String      @id @default(uuid())
+  orderNumber       String      @unique
+  userId            String
+  user              User        @relation(fields: [userId], references: [id])
+  productType       ProductType
+  currencyCode      String
+  rate              Rate        @relation(fields: [currencyCode], references: [currencyCode])
+  amountForeign     Float       // Amount in foreign currency
+  amountINR         Float       // Total amount in INR
+  exchangeRate      Float       // Rate applied at booking
+  commission        Float       @default(0)
+  taxes             Float       @default(0)
+  deliveryCharge    Float       @default(0)
+  totalAmount       Float       // Final payable amount
+  status            OrderStatus @default(CREATED)
+  paymentStatus     PaymentStatus @default(PENDING)
+  partnerId         String?
+  partner           Partner?    @relation(fields: [partnerId], references: [id])
+  addressId         String?
+  address           Address?    @relation(fields: [addressId], references: [id])
+  deliveryType      String?     // DOORSTEP, PICKUP
+  scheduledDelivery DateTime?
+  notes             String?
+  metadata          Json?       // Additional product-specific data
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  transactions      Transaction[]
+
+  @@index([userId])
+  @@index([orderNumber])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum ProductType {
+  BUY_CURRENCY      // Buy foreign currency cash
+  SELL_CURRENCY     // Sell foreign currency cash
+  FOREX_CARD        // New forex card
+  CARD_RELOAD       // Reload existing card
+  CARD_UNLOAD       // Unload/encash card
+  SEND_MONEY        // International money transfer
+  TRAVEL_SIM        // Travel SIM card
+  TRAVEL_INSURANCE  // Travel insurance
+}
+
+enum OrderStatus {
+  CREATED
+  KYC_PENDING
+  KYC_VERIFIED
+  PAYMENT_PENDING
+  PAYMENT_COMPLETED
+  PROCESSING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  INITIATED
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+// Transactions (payments)
+model Transaction {
+  id              String        @id @default(uuid())
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id])
+  userId          String
+  user            User          @relation(fields: [userId], references: [id])
+  amount          Float
+  currency        String        @default("INR")
+  paymentMethod   PaymentMethod
+  paymentGateway  String?       // razorpay, stripe, etc.
+  gatewayOrderId  String?
+  gatewayPaymentId String?
+  status          PaymentStatus @default(PENDING)
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([orderId])
+  @@index([userId])
+  @@index([status])
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  NETBANKING
+  WALLET
+  CASH
+}
+
+// Offers and promotions
+model Offer {
+  id          String    @id @default(uuid())
+  title       String
+  description String
+  code        String    @unique
+  discountType String   // PERCENTAGE, FLAT, CASHBACK
+  discountValue Float
+  minAmount   Float     @default(0)
+  maxDiscount Float?
+  validFrom   DateTime
+  validUntil  DateTime
+  isActive    Boolean   @default(true)
+  usageLimit  Int?      // Max times this offer can be used
+  usageCount  Int       @default(0)
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([code])
+  @@index([isActive])
+}
+
+// Rate alerts
+model RateAlert {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencyCode String
+  targetRate   Float
+  alertType    String   // EMAIL, SMS, BOTH
+  isActive     Boolean  @default(true)
+  triggered    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@index([currencyCode])
+  @@index([isActive])
+}
+
+// Referral system
+model Referral {
+  id            String   @id @default(uuid())
+  referrerId    String
+  referrer      User     @relation(fields: [referrerId], references: [id])
+  referredEmail String
+  referredPhone String?
+  status        String   @default("PENDING") // PENDING, COMPLETED, REWARDED
+  rewardAmount  Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([referrerId])
+  @@index([status])
+}
+
+// Audit logs for compliance
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String   // LOGIN, ORDER_CREATED, PAYMENT, KYC_UPDATE, etc.
+  entity    String?  // Order, User, Transaction, etc.
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
